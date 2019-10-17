@@ -44,6 +44,115 @@ const sendData = (data, event) => Promise.all(
         }).promise())
 )
 
+const sendApiRequest = function(endpoint, data, method, event) {
+    return new Promise(function(resolve, reject) {
+        const options = {
+            hostname: event.api_host,
+            path: `/api/v0/${endpoint}`,
+            method: method,
+            headers: {
+                'x-api-key': event.api_key
+            }
+        }
+
+        if (data) {
+            options.headers['Content-Type'] = 'application/json'
+            options.headers['Content-Length'] = Buffer.byteLength(data)
+        }
+
+        const req = https.request(options, (res) => {
+            var data = ''
+            res.on('readable', function() {
+                let chunk;
+                while (chunk = this.read()) {
+                    data += chunk
+                }
+            })
+            res.on('end', (d) => resolve(JSON.parse(data)))
+            res.on('error', (e) => reject(Error(e)))
+        })
+
+        if (data) {
+            req.write(data)
+        }
+
+        req.end()
+    })
+}
+
+/**
+ * Update Component Status
+ * 
+ * @result  {Object} handler.http request result
+ * @event   {Object} Lambda event data
+ */
+const updateComponent = function(result, event) {
+    const status = result.statusCode === 200 ? "Operational" : "Major Outage"
+    const endpoint = `components/${result.component}`
+    const data = {status: status}
+    return sendApiRequest(endpoint, JSON.stringify(data), 'PATCH', event)
+}
+
+const getOpenIncidents = function(event) {
+    return new Promise(function(resolve, reject) {
+        sendApiRequest('incidents', null, 'GET', event).then(data => {
+            resolve(data.filter(i => i.status !== 'Resolved'))
+        }).catch(error => {
+            reject(error)
+        })
+    })
+}
+
+/**
+ * Create new Incident
+ * 
+ * @result  {Object} handler.http request result
+ * @incidents {Object[]} Existing open incidents
+ * @event   {Object} Lambda event data
+ */
+const createIncident = function(result, incidents, event) {
+    const incidentName = `${result.name} - Site Outage`
+    const existing = incidents.filter(i => i.name === incidentName)
+
+    if (existing.length === 0) {
+        const data = { 
+            name: incidentName,
+            status: "Identified",
+            message: `The site located at ${result.url} is currently unavailable.`
+        }
+
+        sendApiRequest('incidents', JSON.stringify(data), 'POST', event).then(incident => {
+            console.log(`Created Incident ${incident.incidentID}: ${incident.name}`)
+        }).catch(error => {
+            console.log(error)
+        })
+    }
+
+}
+
+/**
+ * Resolve existing Incident
+ * 
+ * @result  {Object} handler.http request result
+ * @incidents {Object[]} Existing open incidents
+ * @event   {Object} Lambda event data
+ */
+const resolveIncident = function(result, incidents, event) {
+    const incidentName = `${result.name} - Site Outage`
+    const existing = incidents.filter(i => i.name === incidentName)
+
+    if (existing.length === 1) {
+        const endpoint = `incidents/${existing[0].incidentID}`
+        const data = {status: "Resolved"}
+
+        sendApiRequest(endpoint, JSON.stringify(data), 'PATCH', event).then(incident => {
+            console.log(`Resolved Incident ${incident.incidentID}: ${incident.name}`)
+        }).catch(error => {
+            console.log(error)
+        })
+    }
+}
+
 const handlers = {}
 
 /**
@@ -71,7 +180,8 @@ exports.handler = function(event, context, callback) {
             name: target.name || target.url,
             timings: {
                 start: hrtime()
-            }
+            },
+            component: target.component
         }
         switch (target.type) {
         case "smtp":
@@ -105,6 +215,27 @@ exports.handler = function(event, context, callback) {
                 Timestamp: timestamp
             }, ...timingMetrics]
         }).reduce((acc, val) => [...acc, ...val], [])
+
+        /*
+         * For any results which do not have an HTTP 200 response code, update the
+         * component status to 'Major Outage' and create a new incident. Close any
+         * open incidents for results with a 200 response code.
+         */
+        getOpenIncidents(event).then(incidents => {
+            for (const result of results) {
+                updateComponent(result, event).then(data => {
+                    if (result.statusCode !== 200) {
+                        createIncident(result, incidents, event)
+                    } else {
+                        resolveIncident(result, incidents, event)
+                    }
+                }).catch(error => {
+                    console.log(error)
+                })
+            }
+        }).catch(error => {
+            console.log(error)
+        })
 
         return sendData(metricData, event)
             .then(data => {
