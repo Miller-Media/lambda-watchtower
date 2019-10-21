@@ -118,7 +118,7 @@ const createIncident = function(result, incidents, event) {
         const data = { 
             name: incidentName,
             status: "Identified",
-            message: `The site located at ${result.url} is currently unavailable.`
+            message: `${result.name} is currently unavailable.`
         }
 
         sendApiRequest('incidents', JSON.stringify(data), 'POST', event).then(incident => {
@@ -143,7 +143,10 @@ const resolveIncident = function(result, incidents, event) {
 
     if (existing.length === 1) {
         const endpoint = `incidents/${existing[0].incidentID}`
-        const data = {status: "Resolved"}
+        const data = {
+            status: "Resolved",
+            message: `${result.name} is currently operating normally.`
+        }
 
         sendApiRequest(endpoint, JSON.stringify(data), 'PATCH', event).then(incident => {
             console.log(`Resolved Incident ${incident.incidentID}: ${incident.name}`)
