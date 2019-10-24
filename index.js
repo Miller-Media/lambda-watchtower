@@ -9,7 +9,7 @@ const hrToMs = (timing) => Math.round(timing[0] * 1000 + timing[1] / 1000000)
 const hrDiff = (start, end) => hrToMs(end) - hrToMs(start)
 const timingsDiff = (timings, key1, key2) =>
     (timings[key1] && timings[key2] && hrDiff(timings[key1], timings[key2])) || -1
-const defaultTimeout = 2000
+const defaultTimeout = 5000
 
 const processTimings = function(timings) {
     return {
@@ -118,7 +118,7 @@ const createIncident = function(result, incidents, event) {
         const data = { 
             name: incidentName,
             status: "Identified",
-            message: `${result.name} is currently unavailable.`
+            message: `${result.name} is currently unavailable (HTTP ${result.statusCode}).`
         }
 
         sendApiRequest('incidents', JSON.stringify(data), 'POST', event).then(incident => {
